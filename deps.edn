@@ -1,0 +1,4 @@
+{:paths ["src"]
+ :deps {net.mikera/core.matrix {:mvn/version "0.63.0"}}
+ :aliases {:test {:extra-paths ["test"]}}
+}
