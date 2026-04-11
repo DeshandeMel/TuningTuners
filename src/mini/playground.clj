@@ -31,10 +31,6 @@
   "Random float between -1 and 1"
   [] (dec (rand 2)))
 
-;; synapses are mutable so I'm using atoms
-(def synapses-0 (atom (matrix-of random-synapse 3 5)))
-(def synapses-1 (atom (matrix-of random-synapse 5 1)))
-
 (defn activation
   "Sigmoid function"
   [x] (/ 1 (+ 1 (exp (- x)))))
@@ -120,17 +116,20 @@
 
 (defn individual [learning_rate]
   {:synapses [(matrix-of random-synapse 3 5) (matrix-of random-synapse 5 1)]
-   :learning-rate learning_rate
-  }
-  )
+   :learning-rate learning_rate})
 
 (defn new_individual []
-  (individual (rand))
-  )
+  (individual (rand)))
 
 (defn mutate [indiv]
   (let [new-rate (+ (/ (rand) 100) (:learning-rate indiv))]
     (assoc indiv :learning-rate new-rate)))
+
+(defn crossover [indiv1 indiv2]
+  ; add more hyperparameters as needed
+  (individual (if (= 1 (+ 1 (rand-int 2)))
+                (:learning-rate indiv1)
+                (:learning-rate indiv2))))
 
 (defn report
   "Prints a report on the status of the population at the given generation."
