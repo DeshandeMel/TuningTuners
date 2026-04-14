@@ -121,6 +121,10 @@
 (defn new_individual []
   (individual (rand)))
 
+(defn eval-lr [lr]
+  (let [indiv (individual lr)]
+    (assoc indiv :fitness (fitness indiv))))
+
 (defn mutate [indiv]
   (let [new-rate (+ (/ (rand) 100) (:learning-rate indiv))]
     (assoc indiv :learning-rate new-rate)))
@@ -154,4 +158,55 @@
                    (fittest population))
              (inc generation)))))
 
-(evolve-learning-rate 10 10)
+(defn grid-search-lr
+  ([] (grid-search-lr 100))
+  ([budget]
+   (let [step (/ 1.0 (dec budget))
+         pop  (map #(eval-lr (* % step)) (range budget))
+         best (apply min-key :fitness pop)]
+     (println {:search :grid :evals budget :best-lr (:learning-rate best) :best-fitness (:fitness best)})
+     best)))
+
+(defn random-search-lr
+  ([] (random-search-lr 100))
+  ([budget]
+   (let [pop  (repeatedly budget #(eval-lr (rand)))
+         best (apply min-key :fitness pop)]
+     (println {:search :random :evals budget :best-lr (:learning-rate best) :best-fitness (:fitness best)})
+     best)))
+
+(defn anneal-lr
+  ([] (anneal-lr 100))
+  ([budget]
+   (let [t0    1.0
+         t-min 0.001
+         decay (Math/pow (/ t-min t0) (/ 1.0 budget))
+         clamp (fn [x] (max 0.0 (min 1.0 x)))]
+     (loop [current (eval-lr (rand))
+            best    current
+            t       t0
+            i       (dec budget)]
+       (if (zero? i)
+         (do (println {:search :annealing :evals budget
+                       :best-lr (:learning-rate best)
+                       :best-fitness (:fitness best)})
+             best)
+         (let [candidate (eval-lr (clamp (+ (:learning-rate current)
+                                            (* t (- (rand) 0.5) 2.0))))
+               delta     (- (:fitness candidate) (:fitness current))
+               accept?   (or (neg? delta)
+                             (< (rand) (Math/exp (- (/ delta t)))))
+               next-cur  (if accept? candidate current)
+               next-best (if (< (:fitness candidate) (:fitness best)) candidate best)]
+           (recur next-cur next-best (* t decay) (dec i))))))))
+
+(defn compare-searches
+  ([] (compare-searches 100))
+  ([budget]
+   {:evolutionary (evolve-learning-rate (int (Math/sqrt budget))
+                                        (int (Math/sqrt budget)))
+    :grid         (grid-search-lr budget)
+    :random       (random-search-lr budget)
+    :annealing    (anneal-lr budget)}))
+
+(compare-searches 100)
