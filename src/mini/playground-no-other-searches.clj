@@ -96,11 +96,7 @@
 (defn fittest
   "Returns the fittest of the given individuals. We want lower error"
   [individuals]
-  (reduce (fn [i1 i2]
-            (if (< (fitness i1) (fitness i2))
-              i1
-              i2))
-          individuals))
+  (apply min-key fitness individuals))
 
 ;; The mean-error function just gives a single value to represent how
 ;; accurate our network's are. This is useful for debuggin but is not used
@@ -189,7 +185,8 @@
 (defn report
   "Prints a report on the status of the population at the given generation."
   [generation population]
-  (println {:generation generation :best (fittest population) :fitness (fitness (fittest population))}))
+  (let [best (fittest population)]
+    (println {:generation generation :best best :fitness (fitness best)})))
 
 (defn tournament_select
   "Returns an individual selected from population using a tournament."
