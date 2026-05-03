@@ -1,4 +1,4 @@
-(ns ml-model
+(ns mini.playground-no-other-searches
   (:require [clojure.core.matrix :as matrix :refer [dot transpose exp]]
             [clojure.core.matrix.operators :refer :all]
             [clojure.data.csv :as csv]
@@ -9,7 +9,6 @@
     (doall
      (csv/read-csv reader))))
 
-(println (rest (read-csv "iris.csv")))
 (def raw-data (rest (read-csv "iris.csv")))
  
 (def training-input
@@ -330,4 +329,5 @@
          ann  (measure :annealing    #(anneal budget))]
      {:evolutionary evo :grid grid :random rnd :annealing ann})))
 
-(compare-searches 1000)
+(defn run [{:keys [budget] :or {budget 1000}}]
+  (compare-searches (int budget)))
