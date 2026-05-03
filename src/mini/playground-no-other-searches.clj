@@ -221,26 +221,113 @@
 
 (defn evolve-learning-rate
   [population-size generations]
-  (loop [population (repeatedly population-size #(new_individual))
+  (loop [population (doall (pmap (fn [_] (new_individual)) (range population-size)))
          generation 0]
     (report generation population)
     (if (>= generation generations)
       (fittest population)
-      (let [elite          (fittest population)
-            n-children     (dec population-size)
-            n-mutation     (quot n-children 2)
-            n-crossover    (- n-children n-mutation)
-            mutated        (repeatedly n-mutation
-                                       #(mutate (tournament_select population)))
-            crossed        (repeatedly n-crossover
-                                       #(crossover (tournament_select population)
-                                                   (tournament_select population)))]
+      (let [elite       (fittest population)
+            n-children  (dec population-size)
+            n-mutation  (quot n-children 2)
+            n-crossover (- n-children n-mutation)
+            mutated     (doall (pmap (fn [_] (mutate (tournament_select population)))
+                                     (range n-mutation)))
+            crossed     (doall (pmap (fn [_] (crossover (tournament_select population)
+                                                        (tournament_select population)))
+                                     (range n-crossover)))]
         (recur (conj (concat mutated crossed) elite)
                (inc generation))))))
 
+(defn make-individual [lr act iters hidden-size init-scale momentum batch-size]
+  (let [i (individual lr act iters hidden-size init-scale momentum batch-size)]
+    (assoc i :fitness (fitness i))))
 
-(evolve-learning-rate 10 10)
+(defn rand-individual []
+  (let [i (new_individual)] (assoc i :fitness (fitness i))))
 
-;; Accuracy Validation Check
+(defn linspace [lo hi n]
+  (if (= n 1) [lo]
+    (map #(+ lo (* % (/ (- hi lo) (dec n)))) (range n))))
 
-;;  Grid Search
+(defn grid-search
+  ([] (grid-search 1000))
+  ([budget]
+   (let [n      (max 2 (int (Math/pow budget (/ 1.0 7))))
+         combos (for [lr  (linspace 0.0001 1.0 n)
+                      it  (map int (linspace 1 20 n))
+                      hs  (map int (linspace 2 10 n))
+                      sc  (linspace 0.5 1.5 n)
+                      mo  (linspace 0.8 0.999 n)
+                      bs  (map int (linspace 10 50 n))
+                      act activation]
+                  [lr act it hs sc mo bs])
+         pop    (->> combos
+                     (take budget)
+                     (pmap (fn [[lr act it hs sc mo bs]]
+                             (make-individual lr act it hs sc mo bs)))
+                     doall)
+         best   (apply min-key :fitness pop)]
+     (println {:search :grid :evals (count pop) :best-fitness (:fitness best)})
+     best)))
+
+(defn random-search
+  ([] (random-search 1000))
+  ([budget]
+   (let [pop  (doall (pmap (fn [_] (rand-individual)) (range budget)))
+         best (apply min-key :fitness pop)]
+     (println {:search :random :evals budget :best-fitness (:fitness best)})
+     best)))
+
+(defn anneal
+  ([] (anneal 1000))
+  ([budget]
+   (let [t0    1.0
+         t-min 0.001
+         decay (Math/pow (/ t-min t0) (/ 1.0 budget))
+         clamp (fn [lo hi x] (max lo (min hi x)))
+         perturb (fn [indiv t]
+                   (make-individual
+                    (clamp 0.0001 1.0 (+ (:learning-rate indiv) (* t (- (rand) 0.5) 2.0)))
+                    (if (< (rand) (* t 0.3)) (rand-activation-fn) (:activation indiv))
+                    (int (clamp 1 20  (+ (:iterations indiv)  (* t (rand-nth [-1 0 1]) 5))))
+                    (int (clamp 2 10  (+ (:hidden-size indiv)  (* t (rand-nth [-1 0 1]) 3))))
+                    (clamp 0.1 2.0    (+ (:init-scale indiv)  (* t (- (rand) 0.5))))
+                    (clamp 0.0 0.999  (+ (:momentum indiv)    (* t (- (rand) 0.5) 0.4)))
+                    (int (clamp 10 50 (+ (:batch-size indiv)  (* t (rand-nth [-1 0 1]) 10))))))]
+     (loop [current (rand-individual)
+            best    current
+            t       t0
+            i       (dec budget)]
+       (if (zero? i)
+         (do (println {:search :annealing :evals budget :best-fitness (:fitness best)})
+             best)
+         (let [candidate (perturb current t)
+               delta     (- (:fitness candidate) (:fitness current))
+               accept?   (or (neg? delta) (< (rand) (Math/exp (- (/ delta t)))))
+               next-cur  (if accept? candidate current)
+               next-best (if (< (:fitness candidate) (:fitness best)) candidate best)]
+           (recur next-cur next-best (* t decay) (dec i))))))))
+
+(defn measure [label f]
+  (let [rt         (Runtime/getRuntime)
+        _          (System/gc)
+        mem-before (- (.totalMemory rt) (.freeMemory rt))
+        start      (System/currentTimeMillis)
+        result     (f)
+        elapsed-ms (- (System/currentTimeMillis) start)
+        mem-after  (- (.totalMemory rt) (.freeMemory rt))
+        heap-mb    (quot (- mem-after mem-before) (* 1024 1024))]
+    (println {:strategy label :ms elapsed-ms :heap-delta-mb heap-mb})
+    {:result result :ms elapsed-ms :heap-delta-mb heap-mb}))
+
+(defn compare-searches
+  ([] (compare-searches 1000))
+  ([budget]
+   (let [pop-size (int (Math/sqrt budget))
+         evo  (measure :evolutionary #(evolve-learning-rate pop-size pop-size))
+         grid (measure :grid         #(grid-search budget))
+         rnd  (measure :random       #(random-search budget))
+         ann  (measure :annealing    #(anneal budget))]
+     {:evolutionary evo :grid grid :random rnd :annealing ann})))
+
+(compare-searches 1000)
