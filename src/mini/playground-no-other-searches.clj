@@ -110,15 +110,11 @@
 
 (def errors (fn [individual] (- training-output ((network individual) training-input))))
 
-(defn deltas [cost-f individual]
+(defn deltas [cost-f individual batch-input]
   (let [s0 (first (get individual :synapses))
         s1 (second (get individual :synapses))
         activation-fn (:fn (:activation individual))
-        derivative (:deriv (:activation individual))
-        l0 training-input
-        l1 ((layer s0 activation-fn) l0)
-        l2 ((layer s1 activation-fn) l1)]
-
+        derivative (:deriv (:activation individual))]
     (reduce
       (fn [deltas layer]
         (conj deltas
@@ -126,39 +122,51 @@
                  (if (empty? deltas)
                    (cost-f individual)
                    (dot (last deltas) (transpose s1))))))
-      [] [((network individual) training-input) ((layer s0 activation-fn) training-input)])))
+      [] [((network individual) batch-input) ((layer s0 activation-fn) batch-input)])))
 
-(defn gradient-descent [individual cost-fn iterations]
-  (let [{:keys [synapses learning-rate activation]} individual
-        activation-fn (:fn activation)]
+(defn gradient-descent [individual iterations]
+  (let [{:keys [synapses learning-rate activation momentum batch-size]} individual
+        activation-fn (:fn activation)
+        n (count training-input)]
     (loop [i iterations
-           s synapses]
+           s synapses
+           v [(matrix/mul 0 (first synapses))
+              (matrix/mul 0 (second synapses))]]
       (if (zero? i)
         (assoc individual :synapses s)
-        (let [ind      (assoc individual :synapses s)
-              d        (deltas cost-fn ind)
-              s0       (first s)
-              s1       (second s)
-              s0-updated (matrix/add s0 (matrix/mul learning-rate
-                                                    (dot (transpose training-input)
-                                                         (second d))))
-              s1-updated (matrix/add s1 (matrix/mul learning-rate
-                                                    (dot (transpose ((layer s0 activation-fn) training-input))
-                                                         (first d))))]
-          (recur (dec i) [s0-updated s1-updated]))))))
+        (let [indices    (repeatedly batch-size #(rand-int n))
+              batch-in   (mapv training-input indices)
+              batch-out  (mapv training-output indices)
+              batch-cost (fn [ind] (matrix/sub batch-out ((network ind) batch-in)))
+              ind        (assoc individual :synapses s)
+              d          (deltas batch-cost ind batch-in)
+              s0         (first s)
+              s1         (second s)
+              v0         (first v)
+              v1         (second v)
+              g0         (dot (transpose batch-in) (second d))
+              g1         (dot (transpose ((layer s0 activation-fn) batch-in)) (first d))
+              new-v0     (matrix/add (matrix/mul momentum v0) (matrix/mul learning-rate g0))
+              new-v1     (matrix/add (matrix/mul momentum v1) (matrix/mul learning-rate g1))]
+          (recur (dec i)
+                 [(matrix/add s0 new-v0) (matrix/add s1 new-v1)]
+                 [new-v0 new-v1])))))
 
 
-(defn individual [learning_rate activation iterations hidden-size init-scale]
+(defn individual [learning_rate activation iterations hidden-size init-scale momentum batch-size]
   (gradient-descent {:synapses [(matrix-of #(* init-scale (dec (rand 2))) 4 hidden-size)
                                 (matrix-of #(* init-scale (dec (rand 2))) hidden-size 1)]
                      :learning-rate learning_rate
                      :activation activation
                      :iterations iterations
                      :hidden-size hidden-size
-                     :init-scale init-scale} errors iterations))
+                     :init-scale init-scale
+                     :momentum momentum
+                     :batch-size batch-size} iterations))
 
 (defn new_individual []
-  (individual (rand) (rand-activation-fn) 5 (+ 2 (rand-int 9)) (+ 0.5 (rand))))
+  (individual (rand) (rand-activation-fn) 5 (+ 2 (rand-int 9)) (+ 0.5 (rand))
+              (+ 0.8 (* 0.19 (rand))) (+ 10 (rand-int 41))))
 
 ;; Probability of differing activation function than parents
 (def mutation-rate 0.1)
@@ -170,8 +178,10 @@
                           (:activation indiv))
         new-iterations  (max 1 (+ (rand-nth [1 -1]) (:iterations indiv)))
         new-hidden-size (max 1 (+ (rand-nth [1 -1]) (or (:hidden-size indiv) 5)))
-        new-init-scale  (max 0.1 (+ (* (rand-nth [1 -1]) (/ (rand) 10)) (or (:init-scale indiv) 1.0)))]
-    (individual new-rate new-activation new-iterations new-hidden-size new-init-scale)))
+        new-init-scale  (max 0.1 (+ (* (rand-nth [1 -1]) (/ (rand) 10)) (or (:init-scale indiv) 1.0)))
+        new-momentum    (min 0.999 (max 0.0 (+ (* (rand-nth [1 -1]) (* 0.05 (rand))) (or (:momentum indiv) 0.9))))
+        new-batch-size  (int (max 1 (+ (* (rand-nth [1 -1]) (+ 1 (rand-int 5))) (or (:batch-size indiv) 32))))]
+    (individual new-rate new-activation new-iterations new-hidden-size new-init-scale new-momentum new-batch-size)))
 
 (defn crossover [indiv1 indiv2]
   (let [activation (or (if (= 1 (rand-int 2))
@@ -190,7 +200,13 @@
                   (:hidden-size indiv2))
                 (if (= 1 (rand-int 2))
                   (:init-scale indiv1)
-                  (:init-scale indiv2)))))
+                  (:init-scale indiv2))
+                (if (= 1 (rand-int 2))
+                  (:momentum indiv1)
+                  (:momentum indiv2))
+                (if (= 1 (rand-int 2))
+                  (:batch-size indiv1)
+                  (:batch-size indiv2)))))
 
 (defn report
   "Prints a report on the status of the population at the given generation."
