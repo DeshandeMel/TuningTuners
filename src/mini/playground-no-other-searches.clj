@@ -164,13 +164,13 @@
 (def mutation-rate 0.1)
 
 (defn mutate [indiv]
-  (let [new-rate       (max 0.0001 (+ (* (rand-nth [1 -1]) (/ (rand) 100)) (:learning-rate indiv)))
-        new-activation (if (< (rand) mutation-rate)
-                         (rand-activation-fn)
-                         (:activation indiv))
+  (let [new-rate        (max 0.0001 (+ (* (rand-nth [1 -1]) (/ (rand) 100)) (:learning-rate indiv)))
+        new-activation  (if (< (rand) mutation-rate)
+                          (rand-activation-fn)
+                          (:activation indiv))
         new-iterations  (max 1 (+ (rand-nth [1 -1]) (:iterations indiv)))
-        new-hidden-size (max 1 (+ (rand-nth [1 -1]) (:hidden-size indiv)))
-        new-init-scale  (max 0.1 (+ (* (rand-nth [1 -1]) (/ (rand) 10)) (:init-scale indiv)))]
+        new-hidden-size (max 1 (+ (rand-nth [1 -1]) (or (:hidden-size indiv) 5)))
+        new-init-scale  (max 0.1 (+ (* (rand-nth [1 -1]) (/ (rand) 10)) (or (:init-scale indiv) 1.0)))]
     (individual new-rate new-activation new-iterations new-hidden-size new-init-scale)))
 
 (defn crossover [indiv1 indiv2]
