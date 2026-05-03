@@ -148,28 +148,32 @@
           (recur (dec i) [s0-updated s1-updated]))))))
 
 
-(defn individual [learning_rate activation iterations]
-  (gradient-descent {:synapses [(matrix-of random-synapse 4 5) (matrix-of random-synapse 5 1)]
-   :learning-rate learning_rate
-   :activation activation
-   :iterations iterations} errors iterations))
+(defn individual [learning_rate activation iterations hidden-size init-scale]
+  (gradient-descent {:synapses [(matrix-of #(* init-scale (dec (rand 2))) 4 hidden-size)
+                                (matrix-of #(* init-scale (dec (rand 2))) hidden-size 1)]
+                     :learning-rate learning_rate
+                     :activation activation
+                     :iterations iterations
+                     :hidden-size hidden-size
+                     :init-scale init-scale} errors iterations))
 
 (defn new_individual []
-  (individual (rand) (rand-activation-fn) 5))
+  (individual (rand) (rand-activation-fn) 5 (+ 2 (rand-int 9)) (+ 0.5 (rand))))
 
 ;; Probability of differing activation function than parents
 (def mutation-rate 0.1)
 
 (defn mutate [indiv]
-  (let [new-rate (+ (/ (rand) 100) (:learning-rate indiv))
+  (let [new-rate       (max 0.0001 (+ (* (rand-nth [1 -1]) (/ (rand) 100)) (:learning-rate indiv)))
         new-activation (if (< (rand) mutation-rate)
                          (rand-activation-fn)
                          (:activation indiv))
-        new-iterations (max 1 (+ (rand-nth [1 -1]) (:iterations indiv)))]
-    (individual new-rate new-activation new-iterations)))
+        new-iterations  (max 1 (+ (rand-nth [1 -1]) (:iterations indiv)))
+        new-hidden-size (max 1 (+ (rand-nth [1 -1]) (:hidden-size indiv)))
+        new-init-scale  (max 0.1 (+ (* (rand-nth [1 -1]) (/ (rand) 10)) (:init-scale indiv)))]
+    (individual new-rate new-activation new-iterations new-hidden-size new-init-scale)))
 
 (defn crossover [indiv1 indiv2]
-  ; add more hyperparameters if needed
   (let [activation (or (if (= 1 (rand-int 2))
                          (:activation indiv1)
                          (:activation indiv2))
@@ -180,7 +184,13 @@
                 activation
                 (if (= 1 (rand-int 2))
                   (:iterations indiv1)
-                  (:iterations indiv2)))))
+                  (:iterations indiv2))
+                (if (= 1 (rand-int 2))
+                  (:hidden-size indiv1)
+                  (:hidden-size indiv2))
+                (if (= 1 (rand-int 2))
+                  (:init-scale indiv1)
+                  (:init-scale indiv2)))))
 
 (defn report
   "Prints a report on the status of the population at the given generation."
