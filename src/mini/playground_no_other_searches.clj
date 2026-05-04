@@ -94,6 +94,18 @@
   (rand-nth activation))
 ;; (rand-activation-fn)
 
+(defn dropout-mask
+  [x rate]
+  (let [keep-prob (- 1 rate)]
+    (matrix/emap (fn [_]
+                   (if (< (rand) keep-prob)
+                     (/ 1 keep-prob)
+                     0))
+                 x)))
+
+(defn apply-dropout [x mask]
+  (matrix/mul x mask))
+
 (defn layer
   "The layers in our network are a curried function of weights and inputs"
   [weights activation-fn]
@@ -103,8 +115,23 @@
 (defn network [individual]
   (let [s0 (first (:synapses individual))
         s1 (second (:synapses individual))
+        activation-fn (:fn (:activation individual))
+        dropout-rate (:dropout-rate individual)]
+   (fn [inputs]
+     (let [l1 (activation-fn (dot inputs s0))
+           mask (dropout-mask l1 dropout-rate)
+           l1-drop (apply-dropout l1 mask)
+           l2 (activation-fn (dot l1-drop s1))]
+       l2))))
+
+(defn network-no-dropout [individual]
+  (let [s0 (first (:synapses individual))
+        s1 (second (:synapses individual))
         activation-fn (:fn (:activation individual))]
-    (comp (layer s1 activation-fn) (layer s0 activation-fn))))
+    (fn [inputs]
+      (let [l1 (activation-fn (dot inputs s0))
+            l2 (activation-fn (dot l1 s1))]
+        l2))))
 
 ;; Thats all we need for forward propagation.
 ;; We can now use our network as a function which takes training input
@@ -153,13 +180,13 @@
 (defn fitness [individual]
   ;; (network individual) returns a function. 
   ;; We then call that function with training-input.
-  (let [prediction ((network individual) test-input)]
+  (let [prediction ((network-no-dropout individual) test-input)]
     (accuracy test-output prediction)))
 
 (defn validation_fitness [individual]
   ;; (network individual) returns a function. 
   ;; We then call that function with training-input.
-  (let [prediction ((network individual) validation-input)]
+  (let [prediction ((network-no-dropout individual) validation-input)]
     (accuracy validation-output prediction)))
 
 (defn fittest
@@ -191,17 +218,24 @@
   (let [s0 (first (get individual :synapses))
         s1 (second (get individual :synapses))
         activation-fn (:fn (:activation individual))
-        derivative (:deriv (:activation individual))]
-    (reduce
-      (fn [deltas layer]
-        (conj deltas
-              (* (derivative layer)
-                 (if (empty? deltas)
-                   (cost-f individual)
-                   (dot (last deltas) (transpose s1))))))
-      [] [((network individual) batch-input) ((layer s0 activation-fn) batch-input)])))
+        derivative (:deriv (:activation individual))
+        dropout-rate (:dropout-rate individual)
 
-training-input
+        l0 batch-input
+        l1 (activation-fn (dot l0 s0))
+        mask (dropout-mask l1 dropout-rate)
+        l1-drop (apply-dropout l1 mask)
+
+        l2 (activation-fn (dot l1-drop s1))
+
+        l2-error (cost-f individual)
+        l2-delta (* l2-error (derivative l2))
+
+        l1-error (dot l2-delta (transpose s1))
+
+        l1-delta (* (apply-dropout l1-error mask)
+                    (derivative l1))]
+    [l2-delta l1-delta]))
 
 (defn gradient-descent [individual iterations]
   (let [{:keys [synapses learning-rate activation momentum batch-size]} individual
@@ -232,7 +266,8 @@ training-input
                  [new-v0 new-v1]))))))
 
 
-(defn individual [learning_rate activation iterations hidden-size init-scale momentum batch-size]
+(defn individual [learning_rate activation iterations hidden-size init-scale 
+                  momentum batch-size dropout-rate]
   (gradient-descent {:synapses [(matrix-of #(* init-scale (dec (rand 2))) 13 hidden-size)
                                 (matrix-of #(* init-scale (dec (rand 2))) hidden-size 3)]
                      :learning-rate learning_rate
@@ -241,11 +276,12 @@ training-input
                      :hidden-size hidden-size
                      :init-scale init-scale
                      :momentum momentum
-                     :batch-size batch-size} iterations))
+                     :batch-size batch-size
+                     :dropout-rate dropout-rate} iterations))
 
 (defn new_individual []
   (individual (rand) (rand-activation-fn) 5 (+ 2 (rand-int 9)) (+ 0.5 (rand))
-              (+ 0.8 (* 0.19 (rand))) (+ 10 (rand-int 41))))
+              (+ 0.8 (* 0.19 (rand))) (+ 10 (rand-int 41)) (rand)))
 
 ;; Probability of differing activation function than parents
 (def mutation-rate 0.1)
@@ -259,8 +295,12 @@ training-input
         new-hidden-size (max 1 (+ (rand-nth [1 -1]) (or (:hidden-size indiv) 5)))
         new-init-scale  (max 0.1 (+ (* (rand-nth [1 -1]) (/ (rand) 10)) (or (:init-scale indiv) 1.0)))
         new-momentum    (min 0.999 (max 0.0 (+ (* (rand-nth [1 -1]) (* 0.05 (rand))) (or (:momentum indiv) 0.9))))
-        new-batch-size  (int (max 1 (+ (* (rand-nth [1 -1]) (+ 1 (rand-int 5))) (or (:batch-size indiv) 32))))]
-    (individual new-rate new-activation new-iterations new-hidden-size new-init-scale new-momentum new-batch-size)))
+        new-batch-size  (int (max 1 (+ (* (rand-nth [1 -1]) (+ 1 (rand-int 5))) (or (:batch-size indiv) 32))))
+        new-dropout (-> (:dropout-rate indiv)
+                        (+ (- (rand 0.1) 0.05))
+                        (max 0.0)
+                        (min 0.9))]
+    (individual new-rate new-activation new-iterations new-hidden-size new-init-scale new-momentum new-batch-size new-dropout)))
 
 (defn crossover [indiv1 indiv2]
   (let [activation (or (if (= 1 (rand-int 2))
@@ -285,7 +325,10 @@ training-input
                   (:momentum indiv2))
                 (if (= 1 (rand-int 2))
                   (:batch-size indiv1)
-                  (:batch-size indiv2)))))
+                  (:batch-size indiv2))
+                (if (= 1 (rand-int 2))
+                  (:dropout-rate indiv1)
+                  (:dropout-rate indiv2)))))
 
 (defn report
   "Prints a report on the status of the population at the given generation."
@@ -318,8 +361,8 @@ training-input
         (recur (conj (concat mutated crossed) elite)
                (inc generation))))))
 
-(defn make-individual [lr act iters hidden-size init-scale momentum batch-size]
-  (let [i (individual lr act iters hidden-size init-scale momentum batch-size)]
+(defn make-individual [lr act iters hidden-size init-scale momentum batch-size dropout]
+  (let [i (individual lr act iters hidden-size init-scale momentum batch-size dropout)]
     (assoc i :fitness (fitness i))))
 
 (defn rand-individual []
@@ -334,17 +377,18 @@ training-input
   ([budget]
    (let [n      (max 2 (int (Math/pow budget (/ 1.0 7))))
          combos (for [lr  (linspace 0.0001 1.0 n)
+                      do  (linspace 0.0001 1.0 n)
                       it  (map int (linspace 1 20 n))
                       hs  (map int (linspace 2 10 n))
                       sc  (linspace 0.5 1.5 n)
                       mo  (linspace 0.8 0.999 n)
                       bs  (map int (linspace 10 50 n))
                       act activation]
-                  [lr act it hs sc mo bs])
+                  [lr act it hs sc mo bs do])
          pop    (->> combos
                      (take budget)
-                     (pmap (fn [[lr act it hs sc mo bs]]
-                             (make-individual lr act it hs sc mo bs)))
+                     (pmap (fn [[lr act it hs sc mo bs do]]
+                             (make-individual lr act it hs sc mo bs do)))
                      doall)
          best   (apply min-key :fitness pop)]
      (println {:search :grid :evals (count pop) :best-fitness (:fitness best)})
@@ -373,7 +417,8 @@ training-input
                     (int (clamp 2 10  (+ (:hidden-size indiv)  (* t (rand-nth [-1 0 1]) 3))))
                     (clamp 0.1 2.0    (+ (:init-scale indiv)  (* t (- (rand) 0.5))))
                     (clamp 0.0 0.999  (+ (:momentum indiv)    (* t (- (rand) 0.5) 0.4)))
-                    (int (clamp 10 50 (+ (:batch-size indiv)  (* t (rand-nth [-1 0 1]) 10))))))]
+                    (int (clamp 10 50 (+ (:batch-size indiv)  (* t (rand-nth [-1 0 1]) 10))))
+                    (clamp 0.0001 1.0 (+ (:dropout-rate indiv) (* t (- (rand) 0.5) 2.0)))))]
      (loop [current (rand-individual)
             best    current
             t       t0
