@@ -9,19 +9,48 @@
     (doall
      (csv/read-csv reader))))
 
-(def raw-data (rest (read-csv "iris.csv")))
+(println (read-csv "wine.csv"))
+(def raw-data (shuffle (read-csv "wine.csv")))
  
-(def training-input
+(def input
   (mapv (fn [row]
-          (mapv #(Double/parseDouble %) (take 4 row))) ;; first 4 cols as input
+          (mapv #(Double/parseDouble %) (take-last 13 row))) ;; first 4 cols as input
         raw-data))
 
-(def label->num {"setosa" 0 "versicolor" 1 "virginica" 2})
+(def label->one-hot {"1" [1 0 0]
+                     "2" [0 1 0]
+                     "3" [0 0 1]})
+
+(def output
+  (mapv (fn [row] (label->one-hot (first row))) raw-data))
+
+(def training-input
+  (vec (take (int (* 0.8 (count input))) input)))
+
+(def test-input
+  (let [n (count input)
+        start (int (* 0.8 n))
+        end   (int (* 0.9 n))]
+    (subvec (vec input) start end)))
+
+(def validation-input
+  (let [n (count input)
+        start (int (* 0.9 n))]
+    (subvec (vec input) start n)))
 
 (def training-output
-  (mapv (fn [row]
-          [(label->num (last row))])
-        raw-data))
+  (vec (take (int (* 0.8 (count input))) output)))
+
+(def test-output
+  (let [n (count output)
+        start (int (* 0.8 n))
+        end   (int (* 0.9 n))]
+    (subvec (vec output) start end)))
+
+(def validation-output
+  (let [n (count output)
+        start (int (* 0.9 n))]
+    (subvec (vec output) start n)))
 
 (defn matrix-of
   "Return a matrix of results of a function"
@@ -86,16 +115,58 @@
   (let [absolutes (map #(if (> 0 %) (- %) %) (flatten numbers))]
     (/ (apply + absolutes) (count absolutes))))
 
+(defn maxIndex [v]
+  (.indexOf (vec v) (apply max (vec v))))
+
+(defn accuracy
+  [output predicted]
+  (let [pred-classes (map maxIndex predicted)
+        actual-classes (map maxIndex output)]
+    (double (/ (count (filter true? (map = pred-classes actual-classes)))
+               (count actual-classes)))))
+
+(defn f1_binary
+  [output predicted]
+  (let [TP (count (filter (fn [[a b]] (and (= a 1) (= b 1))) (map vector output predicted)))
+        FP (count (filter (fn [[a b]] (and (= a 0) (= b 1))) (map vector output predicted)))
+        FN (count (filter (fn [[a b]] (and (= a 1) (= b 0))) (map vector output predicted)))
+        precision (/ TP (max 1 (+ TP FP)))
+        recall (/ TP (max 1 (+ TP FN)))]
+    (double (/ (* 2 precision recall) (max 1e-15 (+ precision recall))))))
+
+(defn create-binary [size index-list]
+  (mapv (fn [idx]
+          (assoc (vec (repeat size 0)) idx 1))
+        index-list))
+(map maxIndex [[1 2 3] [3 2 1]])
+
+
+(defn f1
+  [output predicted]
+  (let [max_indices (map maxIndex predicted)
+        len (count (first predicted))
+        binary_predicted (create-binary len max_indices)
+        scores (map f1_binary (apply map vector output)
+                    (apply map vector binary_predicted))]
+    (/ (apply + scores) (count scores))))
+
 (defn fitness [individual]
   ;; (network individual) returns a function. 
   ;; We then call that function with training-input.
-  (let [prediction ((network individual) training-input)]
-    (mean-error (matrix/sub training-output prediction))))
+  (let [prediction ((network individual) test-input)]
+    (accuracy test-output prediction)))
+
+(defn validation_fitness [individual]
+  ;; (network individual) returns a function. 
+  ;; We then call that function with training-input.
+  (let [prediction ((network individual) validation-input)]
+    (accuracy validation-output prediction)))
 
 (defn fittest
-  "Returns the fittest of the given individuals. We want lower error"
+  "Returns the fittest of the given individuals. We want higher accuracy
+  Change max-key to min-key if you want to use error instead."
   [individuals]
-  (apply min-key fitness individuals))
+  (apply max-key fitness individuals))
 
 ;; The mean-error function just gives a single value to represent how
 ;; accurate our network's are. This is useful for debuggin but is not used
@@ -107,7 +178,14 @@
 ;; For each layer we need to multiply the derivative of our layer function
 ;; in relation to the weights by the size of the error.
 
-(def errors (fn [individual] (- training-output ((network individual) training-input))))
+(def raw_errors_cost (fn [individual] (- training-output ((network individual) training-input))))
+
+(defn cross-entropy-loss [predicted actual]
+  (let [epsilon 1e-15  ;; prevent log(0)
+        clipped (matrix/emap #(max epsilon (min (- 1 epsilon) %)) predicted)
+        log-pred (matrix/emap #(Math/log %) clipped)]
+    (- (/ (apply + (flatten (matrix/mul actual log-pred)))
+          (count predicted)))))
 
 (defn deltas [cost-f individual batch-input]
   (let [s0 (first (get individual :synapses))
@@ -123,6 +201,8 @@
                    (dot (last deltas) (transpose s1))))))
       [] [((network individual) batch-input) ((layer s0 activation-fn) batch-input)])))
 
+training-input
+
 (defn gradient-descent [individual iterations]
   (let [{:keys [synapses learning-rate activation momentum batch-size]} individual
         activation-fn (:fn activation)
@@ -133,7 +213,7 @@
               (matrix/mul 0 (second synapses))]]
       (if (zero? i)
         (assoc individual :synapses s)
-        (let [indices    (repeatedly batch-size #(rand-int n))
+        (let [indices    (vec (repeatedly batch-size #(rand-int n)))
               batch-in   (mapv training-input indices)
               batch-out  (mapv training-output indices)
               batch-cost (fn [ind] (matrix/sub batch-out ((network ind) batch-in)))
@@ -149,12 +229,12 @@
               new-v1     (matrix/add (matrix/mul momentum v1) (matrix/mul learning-rate g1))]
           (recur (dec i)
                  [(matrix/add s0 new-v0) (matrix/add s1 new-v1)]
-                 [new-v0 new-v1])))))
+                 [new-v0 new-v1]))))))
 
 
 (defn individual [learning_rate activation iterations hidden-size init-scale momentum batch-size]
-  (gradient-descent {:synapses [(matrix-of #(* init-scale (dec (rand 2))) 4 hidden-size)
-                                (matrix-of #(* init-scale (dec (rand 2))) hidden-size 1)]
+  (gradient-descent {:synapses [(matrix-of #(* init-scale (dec (rand 2))) 13 hidden-size)
+                                (matrix-of #(* init-scale (dec (rand 2))) hidden-size 3)]
                      :learning-rate learning_rate
                      :activation activation
                      :iterations iterations
@@ -211,7 +291,8 @@
   "Prints a report on the status of the population at the given generation."
   [generation population]
   (let [best (fittest population)]
-    (println {:generation generation :best best :fitness (fitness best)})))
+    (println {:generation generation :fitness (fitness best)
+              :valiation_fitness (validation_fitness best)})))
 
 (defn tournament_select
   "Returns an individual selected from population using a tournament."
@@ -331,3 +412,5 @@
 
 (defn run [{:keys [budget] :or {budget 1000}}]
   (compare-searches (int budget)))
+
+(run 100)
